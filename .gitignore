@@ -1,0 +1,16 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+
+# personal data: CVs, generated applications, database
+backend/uploads/
+backend/outputs/
+backend/jword.db
+
+# frontend
+frontend/node_modules/
+frontend/dist/
