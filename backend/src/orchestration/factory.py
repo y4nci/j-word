@@ -13,7 +13,13 @@ from discovery.sources.adzuna_adapter import AdzunaAdapter
 from discovery.sources.arbeitnow_adapter import ArbeitnowAdapter
 from discovery.sources.base_adapter import BaseSourceAdapter
 from discovery.sources.bundesagentur_adapter import BundesagenturAdapter
-from discovery.sources.company_boards import AshbyAdapter, GreenhouseAdapter, LeverAdapter
+from discovery.sources.company_boards import (
+    AshbyAdapter,
+    GreenhouseAdapter,
+    LeverAdapter,
+    PersonioAdapter,
+    SmartRecruitersAdapter,
+)
 from drafting.drafting_service import DraftingService
 from infra.llm_openai import AsyncOpenAIChatLLM
 from onboarding.planning_service import PlanningService
@@ -48,6 +54,8 @@ def make_adapters(client: httpx.AsyncClient) -> dict[SourceName, BaseSourceAdapt
         SourceName.GREENHOUSE: GreenhouseAdapter(client),
         SourceName.LEVER: LeverAdapter(client),
         SourceName.ASHBY: AshbyAdapter(client),
+        SourceName.PERSONIO: PersonioAdapter(client),
+        SourceName.SMARTRECRUITERS: SmartRecruitersAdapter(client),
     }
     app_id, app_key = os.getenv("ADZUNA_APP_ID"), os.getenv("ADZUNA_APP_KEY")
     if app_id and app_key:

@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
-from shared.enums import EmploymentType, SearchStatus, SourceName, WorkMode
+from shared.enums import EmploymentType, RunStatus, SearchStatus, SourceName, WorkMode
 
 
 def _now() -> datetime:
@@ -93,6 +93,10 @@ class JobFilters(BaseModel):
     max_results_per_query: int = 50
     sources: list[SourceName] = Field(default_factory=list)  # empty = all configured
     company_boards: list[CompanyBoard] = Field(default_factory=list)
+    # "deep": more keywords, job titles as extra queries, many more pages per source.
+    depth: Literal["standard", "deep"] = "deep"
+    # Also search the built-in list of Berlin/Germany company boards (discovery/sources/default_boards.py).
+    use_default_boards: bool = True
 
 
 class SearchQuery(BaseModel):
@@ -108,6 +112,33 @@ class SearchPlan(BaseModel):
     keywords: list[str] = Field(default_factory=list)
     screening_criteria: list[str] = Field(default_factory=list)
     queries: list[SearchQuery] = Field(default_factory=list)
+    # Hard filters the planner read from the prompt and applied because the user left them empty.
+    inferred_filters: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class RunOptions(BaseModel):
+    draft: bool = False  # also draft cover letters for good matches (still need approval)
+    min_fit: float = 0.6
+
+
+class SearchRun(BaseModel):
+    """A background "full search" job: discover -> screen (-> draft). Progress is saved as it goes."""
+
+    id: UUID = Field(default_factory=uuid4)
+    status: RunStatus = RunStatus.RUNNING
+    stage: Literal["starting", "discovering", "screening", "drafting", "done"] = "starting"
+    done: int = 0
+    total: int = 0
+    message: str = ""
+    log: list[str] = Field(default_factory=list)  # most recent last, capped
+    options: RunOptions = Field(default_factory=RunOptions)
+    error: Optional[str] = None
+    started_at: datetime = Field(default_factory=_now)
+    finished_at: Optional[datetime] = None
+
+    def note(self, message: str) -> None:
+        self.message = message
+        self.log = [*self.log, f"{_now():%H:%M:%S} {message}"][-60:]
 
 
 class JobSearch(BaseModel):
@@ -117,4 +148,5 @@ class JobSearch(BaseModel):
     filters: JobFilters = Field(default_factory=JobFilters)
     plan: Optional[SearchPlan] = None
     status: SearchStatus = SearchStatus.CREATED
+    run: Optional[SearchRun] = None  # latest background run
     created_at: datetime = Field(default_factory=_now)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -17,10 +18,13 @@ class ScriptedLLM(AsyncChatLLM):
     def __init__(self, routes: dict[str, Any]) -> None:
         self.routes = routes
         self.calls: list[dict[str, Any]] = []
+        self.delay = 0.0  # seconds per call, to simulate a slow model
 
     async def chat(self, *, system_prompt: str, user_prompt: str, temperature: float = 0.3,
                    json_mode: bool = False) -> str:
         self.calls.append({"system_prompt": system_prompt, "user_prompt": user_prompt})
+        if self.delay:
+            await asyncio.sleep(self.delay)
         for marker, reply in self.routes.items():
             if marker in system_prompt:
                 if callable(reply):

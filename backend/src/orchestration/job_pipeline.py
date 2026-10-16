@@ -29,6 +29,7 @@ from onboarding.profile_service import ProfileService
 from screening.screening_service import ScreeningService
 from shared.enums import ActorType, ApplicationStatus as S, ScreeningOutcome, SearchStatus
 from submission.autofill import AutofillSession
+from shared.progress import Progress, noop_progress
 from submission.submission_service import SubmissionService
 
 logger = logging.getLogger(__name__)
@@ -74,10 +75,12 @@ class JobPipeline:
     # ------------------------------------------------------------------ #
     # Discovery + screening
     # ------------------------------------------------------------------ #
-    async def discover(self, search_id: UUID) -> list[tuple[Application, JobPosting]]:
+    async def discover(
+        self, search_id: UUID, *, on_progress: Progress = noop_progress,
+    ) -> list[tuple[Application, JobPosting]]:
         search = await self._search(search_id)
         skip = await self._repo.known_dedupe_keys(search.profile_id)
-        discovered = await self._d.discovery.run(search, skip_keys=skip)
+        discovered = await self._d.discovery.run(search, skip_keys=skip, on_progress=on_progress)
 
         for d in discovered:
             app = Application(search_id=search.id, job_id=d.job.id)
@@ -91,18 +94,34 @@ class JobPipeline:
         return await self._repo.list_applications(search.id)
 
     async def screen(self, search_id: UUID) -> list[tuple[Application, JobPosting]]:
+        await self.screen_batch(search_id)
+        return await self._repo.list_applications(search_id)
+
+    async def count_pending_screening(self, search_id: UUID) -> int:
+        return len(await self._repo.list_applications(search_id, [S.DISCOVERED]))
+
+    async def screen_batch(
+        self, search_id: UUID, *, limit: Optional[int] = None, on_progress: Progress = noop_progress,
+    ) -> int:
+        """Screen up to `limit` not-yet-screened jobs (all if None). Returns how many were screened."""
         search = await self._search(search_id)
         profile = await self._profile(search.profile_id)
-        pending = await self._repo.list_applications(search.id, [S.DISCOVERED])
+        pending = (await self._repo.list_applications(search.id, [S.DISCOVERED]))[:limit]
+        if not pending:
+            return 0
 
-        decisions = await self._d.screening.screen_many(search, profile, [job for _, job in pending])
+        results = await self._d.screening.screen_many(search, profile, [job for _, job in pending], on_progress)
         for app, job in pending:
-            app.record_screening(decisions[str(job.id)])
+            result = results[str(job.id)]
+            app.record_screening(result.decision)
             await self._repo.save_application(app)
+            if result.summary:
+                job.summary = result.summary
+                await self._repo.save_job(job)
 
         search.status = SearchStatus.SCREENED
         await self._repo.save_search(search)
-        return await self._repo.list_applications(search.id)
+        return len(pending)
 
     async def override_screening(self, application_id: UUID, outcome: ScreeningOutcome, reason: str = "") -> Application:
         app = await self._application(application_id)
@@ -116,7 +135,9 @@ class JobPipeline:
     # ------------------------------------------------------------------ #
     # Drafting + human review
     # ------------------------------------------------------------------ #
-    async def draft_all(self, search_id: UUID, *, min_fit: float = 0.0, max_concurrency: int = 4) -> list[Application]:
+    async def draft_all(
+        self, search_id: UUID, *, min_fit: float = 0.0, max_concurrency: int = 4, on_progress: Progress = noop_progress,
+    ) -> list[Application]:
         search = await self._search(search_id)
         candidates = [
             (app, job) for app, job in await self._repo.list_applications(search.id, [S.SCREENED_IN])
@@ -127,13 +148,19 @@ class JobPipeline:
         semaphore = asyncio.Semaphore(max_concurrency)
 
         # LLM calls run concurrently; DB writes stay sequential (one AsyncSession).
+        finished = 0
+
         async def one(job: JobPosting) -> ApplicationDraft | Exception:
+            nonlocal finished
             async with semaphore:
                 try:
                     return await self._d.drafting.draft(search, profile, job)
                 except Exception as exc:
                     logger.warning("Drafting failed for %s: %s", job.url, exc)
                     return exc
+                finally:
+                    finished += 1
+                    on_progress(finished, len(candidates), f"drafted letter for {job.title[:60]!r}")
 
         drafts = await asyncio.gather(*(one(job) for _, job in candidates))
         drafted = []

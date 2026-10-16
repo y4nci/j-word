@@ -8,13 +8,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from api.dependencies import get_pipeline, get_repository
+from api.dependencies import get_pipeline, get_repository, get_runner
 from api.schemas import ApplicationView, CreateSearchRequest, DraftAllRequest, SearchSummary
 from applications.models import Application
 from db.repository import Repository
 from discovery.models import JobPosting
-from onboarding.models import JobSearch
+from onboarding.models import JobSearch, RunOptions, SearchRun
 from orchestration.job_pipeline import JobPipeline
+from orchestration.search_runner import SearchRunner
 from shared.enums import ApplicationStatus
 
 router = APIRouter(prefix="/searches", tags=["searches"])
@@ -70,3 +71,25 @@ async def list_applications(
     repo: Repository = Depends(get_repository),
 ) -> SearchSummary:
     return _summary(search_id, await repo.list_applications(search_id, status))
+
+
+# ---------------- background full-search runs ---------------- #
+@router.post("/{search_id}/run", response_model=SearchRun, status_code=202)
+async def start_run(
+    search_id: UUID,
+    options: RunOptions = RunOptions(),
+    runner: SearchRunner = Depends(get_runner),
+) -> SearchRun:
+    """Start discover -> screen (-> draft) in the background. Poll GET /searches/{id}/run."""
+    return await runner.start(search_id, options)
+
+
+@router.get("/{search_id}/run", response_model=Optional[SearchRun])
+async def run_status(search_id: UUID, runner: SearchRunner = Depends(get_runner)) -> Optional[SearchRun]:
+    return await runner.status(search_id)
+
+
+@router.post("/{search_id}/run/cancel", response_model=Optional[SearchRun])
+async def cancel_run(search_id: UUID, runner: SearchRunner = Depends(get_runner)) -> Optional[SearchRun]:
+    """Stop the running job. Everything screened so far is kept."""
+    return await runner.cancel(search_id)

@@ -18,8 +18,14 @@ from shared.text import normalize_key, tokens
 
 # Part-time-compatible types: asking for part time should not drop Werkstudent roles.
 _PART_TIME_LIKE = {EmploymentType.PART_TIME, EmploymentType.WORKING_STUDENT, EmploymentType.INTERNSHIP}
-# These sources already searched by location + radius; their location strings are not comparable.
-_LOCATION_SEARCH_SOURCES = {SourceName.BUNDESAGENTUR, SourceName.ADZUNA}
+# These sources already filter server-side by location + radius and by publication age.
+# Their location strings aren't comparable, and their posting dates can be the *first*
+# publication of a reposted job, so neither is re-checked locally.
+_SERVER_FILTERED_SOURCES = {SourceName.BUNDESAGENTUR, SourceName.ADZUNA}
+# Company boards list only open jobs, but their dates can be years old for evergreen roles.
+_NO_AGE_CHECK = _SERVER_FILTERED_SOURCES | {
+    SourceName.GREENHOUSE, SourceName.LEVER, SourceName.ASHBY, SourceName.PERSONIO, SourceName.SMARTRECRUITERS,
+}
 
 
 def hard_filter(job: JobPosting, filters: JobFilters, *, now: Optional[datetime] = None) -> Optional[str]:
@@ -36,7 +42,7 @@ def hard_filter(job: JobPosting, filters: JobFilters, *, now: Optional[datetime]
         if not wanted & set(job.employment_types):
             return f"employment type is {', '.join(e.value for e in job.employment_types)}"
 
-    if filters.max_age_days and job.posted_at:
+    if filters.max_age_days and job.posted_at and job.source not in _NO_AGE_CHECK:
         posted = job.posted_at if job.posted_at.tzinfo else job.posted_at.replace(tzinfo=timezone.utc)
         if now - posted > timedelta(days=filters.max_age_days):
             return f"posted {(now - posted).days} days ago"
@@ -60,7 +66,7 @@ def hard_filter(job: JobPosting, filters: JobFilters, *, now: Optional[datetime]
         and job.work_mode != WorkMode.REMOTE
         and job.location
         and not _location_matches(job.location, filters.locations)
-        and job.source not in _LOCATION_SEARCH_SOURCES
+        and job.source not in _SERVER_FILTERED_SOURCES
     ):
         return f"location {job.location!r} not in {filters.locations}"
 
@@ -68,12 +74,28 @@ def hard_filter(job: JobPosting, filters: JobFilters, *, now: Optional[datetime]
 
 
 def matches_keywords(job: JobPosting, keywords: str) -> bool:
-    """Local keyword gate for sources without server-side search: all words must appear in title/tags."""
+    """
+    Local keyword gate for sources without server-side search. A posting matches when
+    every keyword word appears in its title/tags, or when every word appears somewhere
+    in the posting and at least one is in the title. Words match by shared stem, so
+    "engineering" ~ "engineer" and "werkstudent" ~ "werkstudentin".
+    """
     wanted = set(tokens(keywords))
     if not wanted:
         return True
-    haystack = set(tokens(job.title)) | set(tokens(" ".join(job.tags)))
-    return wanted <= haystack
+    title = set(tokens(job.title)) | set(tokens(" ".join(job.tags)))
+    if all(_has(word, title) for word in wanted):
+        return True
+    everything = title | set(tokens(job.description))
+    return any(_has(word, title) for word in wanted) and all(_has(word, everything) for word in wanted)
+
+
+def _has(word: str, vocabulary: set[str]) -> bool:
+    if word in vocabulary:
+        return True
+    if len(word) < 4:  # short words ("ai", "ml", "c++") must match exactly
+        return False
+    return any(len(v) >= 4 and (v.startswith(word) or word.startswith(v)) for v in vocabulary)
 
 
 def _location_matches(location: str, wanted: list[str]) -> bool:

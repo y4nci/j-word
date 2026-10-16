@@ -50,6 +50,23 @@ def test_keyword_gate_needs_all_words_in_title_or_tags():
     assert matches_keywords(job(tags=["Python"]), "python")
 
 
+def test_keyword_gate_matches_stems_and_falls_back_to_description():
+    assert matches_keywords(job(title="AI Engineer (m/w/d)"), "AI Engineering")
+    assert matches_keywords(job(title="Werkstudentin Softwareentwicklung"), "Werkstudent Software")
+    # one word in the title, the rest in the description
+    assert matches_keywords(job(title="Working Student (all genders)", description="Build backend services"), "working student backend")
+    # nothing in the title -> no match even if the description mentions everything
+    assert not matches_keywords(job(title="Office Manager", description="our software engineering team"), "software engineering")
+    # short tokens must match exactly ("ai" must not match "aid")
+    assert not matches_keywords(job(title="First Aid Trainer"), "ai trainer")
+
+
+def test_server_filtered_sources_skip_local_age_check():
+    old = NOW - timedelta(days=150)  # BA reports the *first* publication of reposted jobs
+    assert hard_filter(job(source=SourceName.BUNDESAGENTUR, posted_at=old), JobFilters(max_age_days=30), now=NOW) is None
+    assert hard_filter(job(posted_at=old), JobFilters(max_age_days=30), now=NOW) is not None
+
+
 def test_dedupe_key_separates_cities_but_matches_across_sources():
     berlin = job(location="Berlin, Berlin")
     assert berlin.dedupe_key == job(source=SourceName.BUNDESAGENTUR, location="Berlin").dedupe_key

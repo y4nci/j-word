@@ -28,8 +28,10 @@ logger = logging.getLogger(__name__)
 _ARBEITSZEIT = {
     EmploymentType.FULL_TIME: "vz",
     EmploymentType.PART_TIME: "tz",
-    EmploymentType.WORKING_STUDENT: "tz",
 }
+# ~40% of Werkstudent / Praktikum postings carry no 'tz' tag (checked live 2026-10), so a
+# request that includes these types is not restricted by working time at all.
+_UNTAGGED_TYPES = {EmploymentType.WORKING_STUDENT, EmploymentType.INTERNSHIP}
 
 
 class BundesagenturAdapter(BaseSourceAdapter):
@@ -41,10 +43,10 @@ class BundesagenturAdapter(BaseSourceAdapter):
     JOB_PAGE = "https://www.arbeitsagentur.de/jobsuche/jobdetail/{refnr}"
 
     async def search(self, query: SearchQuery, filters: JobFilters) -> list[JobPosting]:
+        size = min(query.max_results, 100)
         params: dict[str, str | int] = {
             "was": query.keywords,
-            "page": 1,
-            "size": min(query.max_results, 100),
+            "size": size,
             "angebotsart": 1,  # 1 = Arbeit (not Ausbildung/Selbstständigkeit)
         }
         if query.location:
@@ -53,16 +55,28 @@ class BundesagenturAdapter(BaseSourceAdapter):
         if filters.max_age_days:
             params["veroeffentlichtseit"] = filters.max_age_days
 
-        codes = {_ARBEITSZEIT[e] for e in filters.employment_types if e in _ARBEITSZEIT}
+        codes = set()
+        if not _UNTAGGED_TYPES & set(filters.employment_types):
+            codes = {_ARBEITSZEIT[e] for e in filters.employment_types if e in _ARBEITSZEIT}
         if WorkMode.REMOTE in filters.work_modes and len(filters.work_modes) == 1:
             codes.add("ho")
         if codes:
             params["arbeitszeit"] = ";".join(sorted(codes))
 
-        resp = await self._client.get(f"{self.BASE_URL}{self.SEARCH_PATH}", params=params, headers=self.HEADERS)
-        resp.raise_for_status()
-        items = resp.json().get("ergebnisliste") or []
-        return [self._to_posting(item) for item in items if item.get("referenznummer")]
+        jobs: list[JobPosting] = []
+        page = 1
+        while len(jobs) < query.max_results:
+            resp = await self._client.get(
+                f"{self.BASE_URL}{self.SEARCH_PATH}", params={**params, "page": page}, headers=self.HEADERS,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            items = data.get("ergebnisliste") or []
+            jobs.extend(self._to_posting(item) for item in items if item.get("referenznummer"))
+            if len(items) < size or len(jobs) >= (data.get("maxErgebnisse") or 0):
+                break
+            page += 1
+        return jobs[: query.max_results]
 
     async def fetch_details(self, job: JobPosting) -> JobPosting:
         """Search results carry no description; fetch it from the detail endpoint."""
@@ -112,7 +126,9 @@ class BundesagenturAdapter(BaseSourceAdapter):
             employment_types=list(dict.fromkeys(employment)),
             description=f"{title}\nBerufe: {', '.join(item.get('alleBerufe') or [])}",
             url=self.JOB_PAGE.format(refnr=refnr),
-            posted_at=_parse_date(item.get("datumErsteVeroeffentlichung")),
+            # Current publication period; datumErsteVeroeffentlichung is the first one for reposted jobs.
+            posted_at=_parse_date((item.get("veroeffentlichungszeitraum") or {}).get("von")
+                                  or item.get("datumErsteVeroeffentlichung")),
             language="de",
             raw=item,
         )

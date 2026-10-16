@@ -12,6 +12,7 @@ from discovery.models import JobPosting
 from discovery.sources.base_adapter import BaseSourceAdapter
 from onboarding.models import JobSearch
 from shared.enums import SourceName
+from shared.progress import Progress, noop_progress
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,13 @@ class DiscoveryService:
     def sources(self) -> list[SourceName]:
         return list(self._adapters)
 
-    async def run(self, search: JobSearch, *, skip_keys: set[str] = frozenset()) -> list[DiscoveredJob]:
+    async def run(
+        self,
+        search: JobSearch,
+        *,
+        skip_keys: set[str] = frozenset(),
+        on_progress: Progress = noop_progress,
+    ) -> list[DiscoveredJob]:
         """
         Run every planned query, dedupe across queries/sources, apply hard filters,
         and fetch full descriptions for the jobs that passed.
@@ -45,15 +52,23 @@ class DiscoveryService:
             return []
 
         queries = [q for q in search.plan.queries if q.source in self._adapters]
-        results = await asyncio.gather(
-            *(self._run_query(q, search) for q in queries),
-            return_exceptions=True,
-        )
+        finished = 0
+
+        async def tracked(query) -> list[JobPosting]:
+            nonlocal finished
+            try:
+                return await self._run_query(query, search)
+            finally:
+                finished += 1
+                on_progress(finished, len(queries), f"query {query.source.value}: {query.keywords!r}")
+
+        results = await asyncio.gather(*(tracked(q) for q in queries), return_exceptions=True)
 
         unique: dict[str, JobPosting] = {}
         for query, result in zip(queries, results):
             if isinstance(result, Exception):
                 logger.warning("Query %s/%r failed: %s", query.source.value, query.keywords, result)
+                on_progress(len(queries), len(queries), f"query failed: {query.source.value} {query.keywords!r}: {result}")
                 continue
             for job in result:
                 key = job.dedupe_key
@@ -64,7 +79,18 @@ class DiscoveryService:
                     unique[key] = job
 
         discovered = [DiscoveredJob(job, hard_filter(job, search.filters)) for job in unique.values()]
-        await asyncio.gather(*(self._ensure_details(d) for d in discovered if d.filter_reason is None))
+        passing = [d for d in discovered if d.filter_reason is None]
+        fetched = 0
+
+        async def detail(d: DiscoveredJob) -> None:
+            nonlocal fetched
+            await self._ensure_details(d)
+            fetched += 1
+            if fetched % 10 == 0 or fetched == len(passing):
+                on_progress(fetched, len(passing), "fetching full descriptions")
+
+        on_progress(0, len(passing), f"{len(discovered)} unique jobs, {len(passing)} pass the filters; fetching descriptions")
+        await asyncio.gather(*(detail(d) for d in passing))
 
         # Re-check filters that depend on the full description (language, work mode).
         for d in discovered:

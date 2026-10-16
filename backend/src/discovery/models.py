@@ -12,6 +12,24 @@ from shared.enums import EmploymentType, SourceName, WorkMode
 from shared.text import normalize_key, truncate
 
 
+class JobSummary(BaseModel):
+    """
+    At-a-glance facts extracted by the LLM during screening.
+    Every field is "as stated in the posting"; None means the posting doesn't say.
+    """
+
+    short_description: str = ""  # 1-2 sentences: what you'd actually do
+    pay: Optional[str] = None  # e.g. "15 €/hour", "48-55k €/year"
+    hours: Optional[str] = None  # e.g. "20 h/week"
+    employment: Optional[str] = None  # e.g. "Werkstudent (part time)"
+    work_mode: Optional[str] = None  # e.g. "hybrid, 2 office days/week"
+    location: Optional[str] = None
+    start: Optional[str] = None  # e.g. "ASAP", "01.11.2026"
+    duration: Optional[str] = None  # e.g. "6 months", "permanent"
+    languages: list[str] = Field(default_factory=list)  # required languages
+    key_requirements: list[str] = Field(default_factory=list)  # top must-haves
+
+
 class JobPosting(BaseModel):
     """A job posting normalized across sources."""
 
@@ -31,6 +49,7 @@ class JobPosting(BaseModel):
     language: Optional[str] = None  # "de" / "en"
     tags: list[str] = Field(default_factory=list)
     board_token: Optional[str] = None  # Greenhouse/Lever/Ashby board, used by the autofill submitters
+    summary: Optional[JobSummary] = None  # filled in by screening
     raw: dict[str, Any] = Field(default_factory=dict, exclude=True)
 
     @field_validator("title", "company", mode="after")

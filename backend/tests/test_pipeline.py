@@ -62,7 +62,10 @@ def scripted_llm() -> ScriptedLLM:
             "keywords": ["python developer", "backend engineer"], "screening_criteria": ["Python is core"],
         },
         "screening job postings": lambda prompt: (
-            {"outcome": "include", "fit_score": 0.9, "confidence": 0.8, "reason": "Python backend match"}
+            {"outcome": "include", "fit_score": 0.9, "confidence": 0.8, "reason": "Python backend match",
+             "summary": {"short_description": "Build Python APIs for a booking platform.",
+                         "pay": "16 €/hour", "hours": "20 h/week", "employment": "Werkstudent (part time)",
+                         "work_mode": "remote", "start": "null", "languages": ["English"]}}
             if "Title: Python Developer" in prompt else
             {"outcome": "unsure", "fit_score": 0.5, "confidence": 0.4, "reason": "Stack unclear"}
         ),
@@ -119,6 +122,12 @@ def test_full_pipeline_with_human_gate(tmp_path: Path):
             by_title = {j.title: a for a, j in rows}
             assert by_title["Python Developer"].status == S.SCREENED_IN
             assert by_title["Backend Engineer"].status == S.UNSURE
+            jobs = {j.title: j for _, j in rows}
+            summary = jobs["Python Developer"].summary
+            assert summary.pay == "16 €/hour" and summary.hours == "20 h/week"
+            assert summary.start is None  # "null" string from the LLM is dropped
+            assert jobs["Backend Engineer"].summary is None  # LLM returned no summary
+            assert jobs["Office Python Dev"].summary is None  # filtered out, never sent to the LLM
 
             # A human include overrides the fit threshold (Backend Engineer has fit 0.5).
             maybe = by_title["Backend Engineer"]

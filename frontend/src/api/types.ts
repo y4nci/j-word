@@ -15,7 +15,15 @@ export type ApplicationStatus =
   | "applied"
   | "failed";
 
-export type SourceName = "arbeitnow" | "bundesagentur" | "adzuna" | "greenhouse" | "lever" | "ashby";
+export type SourceName =
+  | "arbeitnow"
+  | "bundesagentur"
+  | "adzuna"
+  | "greenhouse"
+  | "lever"
+  | "ashby"
+  | "personio"
+  | "smartrecruiters";
 export type WorkMode = "remote" | "hybrid" | "onsite" | "unknown";
 export type EmploymentType =
   | "full_time"
@@ -76,6 +84,10 @@ export interface JobFilters {
   max_results_per_query: number;
   sources: SourceName[];
   company_boards: CompanyBoard[];
+  /** "deep": more keywords, job titles as extra queries, many more pages per source */
+  depth: "standard" | "deep";
+  /** also search the built-in Berlin/Germany company boards */
+  use_default_boards: boolean;
 }
 
 export interface SearchQuery {
@@ -91,6 +103,30 @@ export interface SearchPlan {
   keywords: string[];
   screening_criteria: string[];
   queries: SearchQuery[];
+  /** Hard filters read from the prompt and applied because they were left empty. */
+  inferred_filters: Partial<Record<"employment_types" | "work_modes" | "locations", string[]>>;
+}
+
+export type RunStatus = "running" | "completed" | "failed" | "cancelled" | "interrupted";
+
+export interface RunOptions {
+  draft: boolean;
+  min_fit: number;
+}
+
+/** A background "full search" job: discover -> screen (-> draft). */
+export interface SearchRun {
+  id: string;
+  status: RunStatus;
+  stage: "starting" | "discovering" | "screening" | "drafting" | "done";
+  done: number;
+  total: number;
+  message: string;
+  log: string[];
+  options: RunOptions;
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
 }
 
 export interface JobSearch {
@@ -100,6 +136,7 @@ export interface JobSearch {
   filters: JobFilters;
   plan: SearchPlan | null;
   status: SearchStatus;
+  run: SearchRun | null;
   created_at: string;
 }
 
@@ -120,6 +157,21 @@ export interface JobPosting {
   language: string | null;
   tags: string[];
   board_token: string | null;
+  summary: JobSummary | null; // filled in by screening
+}
+
+/** At-a-glance facts from the posting; null = the posting doesn't say. */
+export interface JobSummary {
+  short_description: string;
+  pay: string | null;
+  hours: string | null;
+  employment: string | null;
+  work_mode: string | null;
+  location: string | null;
+  start: string | null;
+  duration: string | null;
+  languages: string[];
+  key_requirements: string[];
 }
 
 export interface ScreeningDecision {

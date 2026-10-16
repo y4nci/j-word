@@ -3,6 +3,9 @@ import type {
   Application,
   ApplicationView,
   CandidateProfile,
+  CompanyBoard,
+  RunOptions,
+  SearchRun,
   JobFilters,
   JobSearch,
   ScreeningOutcome,
@@ -70,6 +73,13 @@ export const client = {
   screen: async (searchId: string) => (await api.post<SearchSummary>(`/searches/${searchId}/screen`)).data,
   draftAll: async (searchId: string, minFit: number) =>
     (await api.post<Application[]>(`/searches/${searchId}/draft`, { min_fit: minFit })).data,
+
+  // ---------------- background full-search runs ---------------- //
+  startRun: async (searchId: string, options: RunOptions) =>
+    (await api.post<SearchRun>(`/searches/${searchId}/run`, options)).data,
+  getRun: async (searchId: string) => (await api.get<SearchRun | null>(`/searches/${searchId}/run`)).data,
+  cancelRun: async (searchId: string) => (await api.post<SearchRun | null>(`/searches/${searchId}/run/cancel`)).data,
+  defaultBoards: async () => (await api.get<CompanyBoard[]>("/meta/default-boards")).data,
 
   // ---------------- applications ---------------- //
   getApplication: async (id: string) => (await api.get<ApplicationView>(`/applications/${id}`)).data,

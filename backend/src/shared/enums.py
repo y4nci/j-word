@@ -35,6 +35,16 @@ class SourceName(str, enum.Enum):
     GREENHOUSE = "greenhouse"
     LEVER = "lever"
     ASHBY = "ashby"
+    PERSONIO = "personio"
+    SMARTRECRUITERS = "smartrecruiters"
+
+
+class RunStatus(str, enum.Enum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"  # server stopped while the run was in progress
 
 
 class WorkMode(str, enum.Enum):

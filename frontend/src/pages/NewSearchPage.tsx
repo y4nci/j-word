@@ -1,12 +1,18 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Button,
+  Checkbox,
   Chip,
+  FormControlLabel,
   IconButton,
   MenuItem,
   Paper,
   Stack,
+  Switch,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
@@ -19,8 +25,8 @@ import { useAsync } from "../hooks/useAsync";
 
 const WORK_MODES: WorkMode[] = ["remote", "hybrid", "onsite"];
 const EMPLOYMENT: EmploymentType[] = ["full_time", "part_time", "working_student", "internship", "contract"];
-const SOURCES: SourceName[] = ["arbeitnow", "bundesagentur", "adzuna", "greenhouse", "lever", "ashby"];
-const BOARD_SOURCES: CompanyBoard["source"][] = ["greenhouse", "lever", "ashby"];
+const SOURCES: SourceName[] = ["arbeitnow", "bundesagentur", "adzuna", "greenhouse", "lever", "ashby", "personio", "smartrecruiters"];
+const BOARD_SOURCES: CompanyBoard["source"][] = ["greenhouse", "lever", "ashby", "personio", "smartrecruiters"];
 
 const DEFAULT_FILTERS: JobFilters = {
   work_modes: [],
@@ -35,6 +41,8 @@ const DEFAULT_FILTERS: JobFilters = {
   max_results_per_query: 50,
   sources: [],
   company_boards: [],
+  depth: "deep",
+  use_default_boards: true,
 };
 
 function ToggleChips<T extends string>({ label, options, values, onChange }: {
@@ -66,7 +74,14 @@ export const NewSearchPage: React.FC = () => {
   const navigate = useNavigate();
   const [prompt, setPrompt] = useState("");
   const [filters, setFilters] = useState<JobFilters>(DEFAULT_FILTERS);
+  const [autoStart, setAutoStart] = useState(true);
+  const [autoDraft, setAutoDraft] = useState(false);
+  const [defaultBoards, setDefaultBoards] = useState<CompanyBoard[]>([]);
   const { busy, error, setError, run } = useAsync();
+
+  useEffect(() => {
+    client.defaultBoards().then(setDefaultBoards, () => setDefaultBoards([]));
+  }, []);
   const set = <K extends keyof JobFilters>(k: K, v: JobFilters[K]) => setFilters({ ...filters, [k]: v });
 
   const setBoard = (i: number, patch: Partial<CompanyBoard>) =>
@@ -128,10 +143,21 @@ export const NewSearchPage: React.FC = () => {
         }
       >
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-          Companies whose careers page runs on Greenhouse, Lever or Ashby. The token is the slug in the URL,
-          e.g. job-boards.greenhouse.io/<b>n26</b>, jobs.lever.co/<b>mistral</b>, jobs.ashbyhq.com/<b>ramp</b>.
-          These are also the sites the browser autofill supports.
+          Companies whose careers page runs on Greenhouse, Lever, Ashby, Personio or SmartRecruiters. The token is
+          the slug in the URL, e.g. job-boards.greenhouse.io/<b>n26</b>, jobs.lever.co/<b>mistral</b>,
+          jobs.ashbyhq.com/<b>ramp</b>, <b>merantix</b>.jobs.personio.de, jobs.smartrecruiters.com/<b>omio</b>.
+          Greenhouse, Lever and Ashby are also the sites the browser autofill supports.
         </Typography>
+        <Tooltip
+          title={defaultBoards.map((b) => b.company_name ?? b.token).join(", ")}
+          placement="bottom-start"
+        >
+          <FormControlLabel
+            sx={{ mb: 1 }}
+            control={<Switch checked={filters.use_default_boards} onChange={(e) => set("use_default_boards", e.target.checked)} />}
+            label={`Also search ${defaultBoards.length || "the"} built-in Berlin/Germany company boards (hover for the list)`}
+          />
+        </Tooltip>
         <Stack spacing={1}>
           {filters.company_boards.map((b, i) => (
             <Stack key={i} direction="row" spacing={1} alignItems="center">
@@ -154,6 +180,36 @@ export const NewSearchPage: React.FC = () => {
         </Stack>
       </Section>
 
+      <Section title="How deep?">
+        <Paper sx={{ p: 3 }}>
+          <Stack spacing={1.5}>
+            <ToggleButtonGroup
+              exclusive
+              size="small"
+              value={filters.depth}
+              onChange={(_, v) => v && set("depth", v)}
+            >
+              <ToggleButton value="standard">Standard</ToggleButton>
+              <ToggleButton value="deep">Deep</ToggleButton>
+            </ToggleButtonGroup>
+            <Typography variant="body2" color="text.secondary">
+              {filters.depth === "deep"
+                ? "Up to 12 keywords plus every target job title as its own query, ~3000 newest Arbeitnow jobs, up to 400 Bundesagentur results per query. Can take a long time and screens many more jobs with the LLM."
+                : "Up to 6 keywords, ~500 newest Arbeitnow jobs, 50 results per query. Quick."}
+            </Typography>
+            <FormControlLabel
+              control={<Checkbox checked={autoStart} onChange={(e) => setAutoStart(e.target.checked)} />}
+              label="Start the full search right away (runs in the background)"
+            />
+            <FormControlLabel
+              disabled={!autoStart}
+              control={<Checkbox checked={autoDraft} onChange={(e) => setAutoDraft(e.target.checked)} />}
+              label="…and draft cover letters for matches with fit ≥ 0.60 (you still approve each one)"
+            />
+          </Stack>
+        </Paper>
+      </Section>
+
       <Stack direction="row" justifyContent="flex-end">
         <Button
           variant="contained"
@@ -163,11 +219,12 @@ export const NewSearchPage: React.FC = () => {
             run("Planning the search", async () => {
               const cleaned = { ...filters, company_boards: filters.company_boards.filter((b) => b.token) };
               const search = await client.createSearch(profileId, prompt, cleaned);
+              if (autoStart) await client.startRun(search.id, { draft: autoDraft, min_fit: 0.6 });
               navigate(`/searches/${search.id}`);
             })
           }
         >
-          Plan search
+          {autoStart ? "Plan and start search" : "Plan search"}
         </Button>
       </Stack>
     </>

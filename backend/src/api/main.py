@@ -10,11 +10,14 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from api.routers import applications, profiles, searches
+from api.dependencies import pipeline_deps
+from api.routers import applications, meta, profiles, searches
 from applications.models import InvalidTransition
+from db import database
 from db.database import create_tables, engine
 from orchestration.factory import make_http_client, make_llms
 from orchestration.job_pipeline import NotFound
+from orchestration.search_runner import RunConflict, SearchRunner
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
@@ -25,7 +28,9 @@ async def lifespan(app: FastAPI):
     app.state.http = make_http_client()
     app.state.llms = make_llms()
     app.state.autofill_sessions = {}
+    app.state.runner = SearchRunner(lambda: pipeline_deps(app), lambda: database.SessionLocal())
     yield
+    await app.state.runner.shutdown()
     await app.state.http.aclose()
     await engine.dispose()
 
@@ -63,6 +68,11 @@ async def _not_found(_: Request, exc: NotFound):
     return JSONResponse(status_code=404, content={"detail": f"{exc} not found"})
 
 
+@app.exception_handler(RunConflict)
+async def _run_conflict(_: Request, exc: RunConflict):
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
 @app.exception_handler(InvalidTransition)
 async def _invalid_transition(_: Request, exc: InvalidTransition):
     return JSONResponse(status_code=409, content={"detail": str(exc)})
@@ -71,6 +81,7 @@ async def _invalid_transition(_: Request, exc: InvalidTransition):
 app.include_router(profiles.router)
 app.include_router(searches.router)
 app.include_router(applications.router)
+app.include_router(meta.router)
 
 
 @app.get("/health")

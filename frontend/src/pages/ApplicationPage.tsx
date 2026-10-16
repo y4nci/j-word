@@ -23,6 +23,7 @@ import { client } from "../api/client";
 import { latestDecision } from "../api/types";
 import type { ApplicationStatus } from "../api/types";
 import { BusyBanner, ErrorAlert, FitBar, Section, StatusChip } from "../components/common";
+import { JobSummaryDetails } from "../components/JobSummary";
 import { useAsync, useResource } from "../hooks/useAsync";
 
 // Mirrors ALLOWED_TRANSITIONS in backend/src/applications/models.py; the backend still enforces it.
@@ -206,6 +207,12 @@ export const ApplicationPage: React.FC = () => {
 
         {/* ---------------- right: context ---------------- */}
         <Box sx={{ flex: 2, width: "100%" }}>
+          <Section title="At a glance">
+            <Paper sx={{ p: 2 }}>
+              <JobSummaryDetails job={job} />
+            </Paper>
+          </Section>
+
           {decision && (
             <Section title="Screening">
               <Paper sx={{ p: 2 }}>

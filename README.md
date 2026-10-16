@@ -41,6 +41,16 @@ submission/     Prepare        package (PDF letter, CV, notes) + browser autofil
 | Bundesagentur für Arbeit | public client id | server-side, location + radius | Largest German database. Search: `/pc/v6/jobs`, details: `/pc/v4/jobdetails` (checked live 2026-10) |
 | Adzuna | paid `ADZUNA_APP_ID`/`ADZUNA_APP_KEY` (check current pricing) | server-side | Optional aggregator. Descriptions are snippets only. Enabled only when keys are set |
 | Greenhouse / Lever / Ashby | none | local keyword filter | Company watchlist (`company_boards`). These are also the sites autofill supports |
+| Personio / SmartRecruiters | none | local keyword filter | Company watchlist; common among German startups and large employers |
+
+Besides your own `company_boards`, searches include ~36 **built-in Berlin/Germany company boards**
+(`discovery/sources/default_boards.py`, checked live 2026-10-16; turn off with `use_default_boards`).
+Company boards skip the age filter: they only list open jobs, but evergreen roles can have old dates.
+
+**Depth** (`filters.depth`): `deep` (default) uses up to 12 keywords plus every target job title as a
+query, ~3000 newest Arbeitnow jobs and up to 400 Bundesagentur results per query; `standard` is the
+quick version. A live deep run took about 50 s for discovery (91 queries, ~400 unique jobs); screening
+then costs one LLM call per job that passes the hard filters.
 
 LinkedIn and Indeed are not included. Neither has a public job API, and LinkedIn's terms
 prohibit scraping and automated applying; accounts get restricted. If you add one later,
@@ -85,12 +95,16 @@ Open http://localhost:5173:
 1. **Profiles**: upload your CV and paste your proto cover letter. Then check the extracted
    profile and fix anything wrong. Letters can only use facts from it.
 2. **New search**: prompt, hard filters, and optionally company boards (Greenhouse / Lever / Ashby slugs).
-3. **Search**: run Discover → Screen → Draft. Include or exclude any job by hand, and expand a row for details.
+3. **Search**: *Run full search* starts a background job (discover → screen in batches → optionally
+   draft) on the server. You can leave the page; progress and an activity log show on the search page,
+   results appear as batches finish, and Cancel keeps everything screened so far. Run again to continue
+   an interrupted or cancelled run. Include or exclude any job by hand, and expand a row for details.
 4. **Review** each draft: edit it, check the fact-check box, then *Approve this exact text*.
 5. **Prepare** opens the form filled in (Greenhouse / Lever / Ashby) or gives you the package.
    You submit it yourself, then click *I submitted it*.
 
-LLM steps run synchronously and can take a minute or two for many jobs; keep the tab open.
+The manual Discover / Screen / Draft buttons (under "advanced") run in the foreground instead.
+Runs live in the API process: restarting uvicorn marks a running job as *interrupted*.
 
 ### Terminal (interactive)
 

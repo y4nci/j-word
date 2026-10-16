@@ -7,7 +7,6 @@ import {
   IconButton,
   Link,
   Paper,
-  Slider,
   Stack,
   Table,
   TableBody,
@@ -24,8 +23,10 @@ import CloseIcon from "@mui/icons-material/Close";
 import { useNavigate, useParams } from "react-router-dom";
 import { client } from "../api/client";
 import { latestDecision } from "../api/types";
-import type { ApplicationStatus, ApplicationView } from "../api/types";
+import type { ApplicationStatus, ApplicationView, JobSearch } from "../api/types";
 import { BusyBanner, ErrorAlert, FitBar, Section, StatusChip } from "../components/common";
+import { JobFactChips, JobSummaryDetails } from "../components/JobSummary";
+import { RunPanel } from "../components/RunPanel";
 import { useAsync, useResource } from "../hooks/useAsync";
 
 const SCREENABLE: ApplicationStatus[] = ["discovered", "filtered_out", "screened_in", "screened_out", "unsure"];
@@ -45,6 +46,7 @@ export const SearchPage: React.FC = () => {
   const [search, summary] = data ?? [null, null];
   const [filter, setFilter] = useState<ApplicationStatus | null>(null);
   const [minFit, setMinFit] = useState(0.6);
+  const [runActive, setRunActive] = useState(false);
   const { busy, error, setError, run } = useAsync();
 
   const counts = summary?.counts ?? {};
@@ -76,6 +78,7 @@ export const SearchPage: React.FC = () => {
               <b>Keywords:</b> {search.plan.keywords.join(", ")} · <b>{search.plan.queries.length}</b> queries over{" "}
               {[...new Set(search.plan.queries.map((q) => q.source))].join(", ") || "no sources"}
             </Typography>
+            <ActiveFilters search={search} />
             <Typography variant="body2"><b>Screening criteria:</b></Typography>
             <ul style={{ margin: 0 }}>
               {search.plan.screening_criteria.map((c) => <li key={c}><Typography variant="body2">{c}</Typography></li>)}
@@ -84,37 +87,46 @@ export const SearchPage: React.FC = () => {
         </Section>
       )}
 
-      <Section title="Steps">
-        <Paper sx={{ p: 2 }}>
+      <Section title="Full search">
+        <RunPanel
+          searchId={searchId}
+          minFit={minFit}
+          setMinFit={setMinFit}
+          disabled={busy !== null}
+          onChanged={reload}
+          onRunningChange={setRunActive}
+        />
+        <Box component="details" sx={{ mt: 1, "& summary": { cursor: "pointer", color: "text.secondary", fontSize: 14 } }}>
+          <summary>Run steps manually (advanced)</summary>
+        <Paper sx={{ p: 2, mt: 1 }}>
           <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ md: "center" }}>
-            <Button variant="contained" disabled={busy !== null} onClick={() => step("Discovering jobs", () => client.discover(searchId))}>
+            <Button variant="outlined" disabled={busy !== null || runActive} onClick={() => step("Discovering jobs", () => client.discover(searchId))}>
               1 · Discover {discovered > 0 && "more"}
             </Button>
             <Button
-              variant="contained"
-              disabled={busy !== null || !counts.discovered}
+              variant="outlined"
+              disabled={busy !== null || runActive || !counts.discovered}
               onClick={() => step("Screening jobs", () => client.screen(searchId))}
             >
               2 · Screen {counts.discovered ? `(${counts.discovered})` : ""}
             </Button>
-            <Stack direction="row" spacing={2} alignItems="center" sx={{ minWidth: 260 }}>
-              <Button
-                variant="contained"
-                disabled={busy !== null || !counts.screened_in}
-                onClick={() => step("Drafting cover letters", () => client.draftAll(searchId, minFit))}
-              >
-                3 · Draft {counts.screened_in ? `(${counts.screened_in})` : ""}
-              </Button>
-              <Tooltip title="Only draft jobs with at least this fit score. Jobs you included manually are always drafted.">
-                <Box sx={{ flex: 1 }}>
-                  <Typography variant="caption">min fit {minFit.toFixed(2)}</Typography>
-                  <Slider size="small" min={0} max={1} step={0.05} value={minFit} onChange={(_, v) => setMinFit(v as number)} />
-                </Box>
-              </Tooltip>
-            </Stack>
-            <Typography variant="body2" color="text.secondary">4 · Review each draft and approve it ↓</Typography>
+            <Tooltip title="Only drafts jobs with at least the min fit set above. Jobs you included manually are always drafted.">
+              <span>
+                <Button
+                  variant="outlined"
+                  disabled={busy !== null || runActive || !counts.screened_in}
+                  onClick={() => step("Drafting cover letters", () => client.draftAll(searchId, minFit))}
+                >
+                  3 · Draft {counts.screened_in ? `(${counts.screened_in})` : ""}
+                </Button>
+              </span>
+            </Tooltip>
+            <Typography variant="body2" color="text.secondary">
+              These run in the foreground and stop if you close the tab; the full search above doesn't.
+            </Typography>
           </Stack>
         </Paper>
+        </Box>
       </Section>
 
       <Section title={`Jobs (${discovered})`}>
@@ -163,6 +175,41 @@ export const SearchPage: React.FC = () => {
   );
 };
 
+/** The hard filters in effect; ones the planner read from the prompt are marked. */
+const ActiveFilters: React.FC<{ search: JobSearch }> = ({ search }) => {
+  const f = search.filters;
+  const inferred = search.plan?.inferred_filters ?? {};
+  const rows: [string, keyof typeof inferred | null, string[]][] = [
+    ["Employment", "employment_types", f.employment_types],
+    ["Work mode", "work_modes", f.work_modes],
+    ["Locations", "locations", f.locations],
+    ["Posting languages", null, f.posting_languages],
+  ];
+  const active = rows.filter(([, , values]) => values.length > 0);
+  return (
+    <Stack direction="row" gap={0.75} flexWrap="wrap" alignItems="center" sx={{ mb: 1 }}>
+      <Typography variant="body2"><b>Hard filters:</b></Typography>
+      {active.length === 0 && <Typography variant="body2" color="text.secondary">none (any job type, anywhere)</Typography>}
+      {active.map(([label, key, values]) => {
+        const fromPrompt = key !== null && !!inferred[key];
+        return (
+          <Tooltip key={label} title={fromPrompt ? "Read from your prompt because you left this filter empty" : "Set by you"}>
+            <Chip
+              size="small"
+              variant={fromPrompt ? "outlined" : "filled"}
+              color={fromPrompt ? "info" : "default"}
+              label={`${label}: ${values.join(", ").replaceAll("_", " ")}${fromPrompt ? " (from prompt)" : ""}`}
+            />
+          </Tooltip>
+        );
+      })}
+      {f.company_boards.length > 0 && (
+        <Chip size="small" label={`Boards: ${f.company_boards.map((b) => `${b.source}:${b.token}`).join(", ")}`} />
+      )}
+    </Stack>
+  );
+};
+
 const JobRow: React.FC<{
   row: ApplicationView;
   disabled: boolean;
@@ -181,13 +228,12 @@ const JobRow: React.FC<{
             {open ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}
           </IconButton>
         </TableCell>
-        <TableCell sx={{ maxWidth: 320 }}>
+        <TableCell sx={{ maxWidth: 440 }}>
           <Link href={job.url} target="_blank" rel="noreferrer" underline="hover" fontWeight={600}>{job.title}</Link>
           <Typography variant="body2" color="text.secondary">
-            {job.company} · {job.location ?? "n/a"} · {job.work_mode}
-            {job.employment_types.length > 0 && ` · ${job.employment_types.join(", ").replaceAll("_", " ")}`}
+            {job.company} <Typography component="span" variant="caption">· {job.source}</Typography>
           </Typography>
-          <Typography variant="caption" color="text.secondary">{job.source}</Typography>
+          <JobFactChips job={job} exclude={["start", "duration", "languages"]} />
         </TableCell>
         <TableCell><StatusChip status={app.status} /></TableCell>
         <TableCell><FitBar value={d?.fit_score} /></TableCell>
@@ -245,6 +291,10 @@ const JobRow: React.FC<{
           <Collapse in={open} unmountOnExit>
             <Stack direction={{ xs: "column", md: "row" }} spacing={3} sx={{ py: 2 }}>
               <Box sx={{ flex: 1 }}>
+                <Typography variant="subtitle2">At a glance</Typography>
+                <JobSummaryDetails job={job} />
+              </Box>
+              <Box sx={{ flex: 1 }}>
                 {d && (
                   <>
                     <Typography variant="subtitle2">Matched</Typography>
@@ -256,7 +306,6 @@ const JobRow: React.FC<{
                     )}
                   </>
                 )}
-                {job.salary && <Typography variant="body2">Salary: {job.salary}</Typography>}
                 {job.posted_at && <Typography variant="body2">Posted: {new Date(job.posted_at).toLocaleDateString()}</Typography>}
               </Box>
               <Box sx={{ flex: 2, maxHeight: 300, overflowY: "auto", whiteSpace: "pre-wrap", bgcolor: "#fafbfe", p: 1.5, borderRadius: 2 }}>

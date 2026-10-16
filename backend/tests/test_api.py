@@ -1,5 +1,6 @@
 """HTTP-level test of the endpoints the frontend uses (fake LLM, fake source, temp DB)."""
 
+import time
 from pathlib import Path
 
 import pytest
@@ -49,8 +50,10 @@ def client(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(api_main, "make_llms", lambda: (llm, llm))
     monkeypatch.setattr(api_deps, "build_deps", fake_build_deps)
     monkeypatch.setattr("api.routers.profiles.UPLOAD_DIR", tmp_path / "uploads")
+    monkeypatch.setattr(database, "SessionLocal", Session)  # used by the background runner
     api_main.app.dependency_overrides[database.get_session] = get_test_session
     with TestClient(api_main.app) as c:
+        c.llm = llm
         yield c
     api_main.app.dependency_overrides.clear()
 
@@ -95,3 +98,62 @@ def test_frontend_flow_endpoints(client: TestClient):
     assert prepared["status"] == "prepared"
     pdf = client.get(f"/applications/{first['id']}/cover-letter.pdf")
     assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
+
+
+def _new_search(client: TestClient) -> str:
+    profile = client.post(
+        "/profiles", files={"cv": ("cv.txt", b"CV", "text/plain")},
+        data={"proto_cover_letter": "In AutoReview I built...", "links": "{}"},
+    ).json()
+    search = client.post("/searches", json={"profile_id": profile["id"], "prompt": "python backend"}).json()
+    return search["id"]
+
+
+def _wait_for_run(client: TestClient, search_id: str, timeout: float = 10.0) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        run = client.get(f"/searches/{search_id}/run").json()
+        if run and run["status"] != "running":
+            return run
+        time.sleep(0.05)
+    raise AssertionError("run did not finish")
+
+
+def test_background_run_discovers_screens_and_drafts(client: TestClient):
+    search_id = _new_search(client)
+    assert client.get(f"/searches/{search_id}/run").json() is None
+
+    resp = client.post(f"/searches/{search_id}/run", json={"draft": True, "min_fit": 0.6})
+    assert resp.status_code == 202 and resp.json()["status"] == "running"
+
+    run = _wait_for_run(client, search_id)
+    assert run["status"] == "completed" and run["stage"] == "done", run
+    assert any("screened 3/3" in line for line in run["log"])
+    assert any("drafted 1 letters" in line for line in run["log"])
+
+    counts = client.get(f"/searches/{search_id}/applications").json()["counts"]
+    assert counts == {"drafted": 1, "unsure": 2}  # no hard filters set, so all three jobs were screened
+    # Persisted: the stored search carries the finished run.
+    assert client.get(f"/searches/{search_id}").json()["run"]["status"] == "completed"
+
+
+def test_run_conflict_and_cancel_keep_finished_work(client: TestClient):
+    search_id = _new_search(client)
+    client.llm.delay = 2.0  # screening is slow, so the run is still going when we cancel
+    assert client.post(f"/searches/{search_id}/run", json={}).status_code == 202
+    assert client.post(f"/searches/{search_id}/run", json={}).status_code == 409
+
+    time.sleep(0.3)  # let discovery finish and screening start
+    cancelled = client.post(f"/searches/{search_id}/run/cancel").json()
+    assert cancelled["status"] == "cancelled"
+    stored = client.get(f"/searches/{search_id}/run").json()
+    assert stored["status"] == "cancelled" and stored["stage"] == "screening"
+    # Discovery was committed before the cancel; nothing was screened.
+    counts = client.get(f"/searches/{search_id}/applications").json()["counts"]
+    assert counts.get("discovered", 0) >= 1 and "screened_in" not in counts
+
+    # A new run can start afterwards and finishes the remaining work.
+    client.llm.delay = 0.0
+    assert client.post(f"/searches/{search_id}/run", json={}).status_code == 202
+    assert _wait_for_run(client, search_id)["status"] == "completed"
+    assert "discovered" not in client.get(f"/searches/{search_id}/applications").json()["counts"]

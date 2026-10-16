@@ -222,6 +222,9 @@ async def main() -> None:
         for app, job in screened:
             d = app.latest_decision
             print(f"{d.fit_score:.2f}  {app.status.value:<12} {job.title[:45]:<45} {job.company[:25]}")
+            if job.summary:
+                facts = [job.summary.pay, job.summary.hours, job.summary.employment, job.summary.work_mode]
+                print(f"      {' · '.join(f for f in facts if f) or ''}  {job.summary.short_description[:90]}")
 
         await review_unsure(pipeline, rows)
         await session.commit()
